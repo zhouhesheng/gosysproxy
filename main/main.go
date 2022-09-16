@@ -11,7 +11,7 @@ type Service struct {}
 var logger service.Logger
 
 func (*Service) Start(_ service.Service) error {
-	if err := StartProcessAsCurrentUser("notepad.exe", "", ""); err != nil {
+	if err := StartProcessAsCurrentUser("notepad.exe", "notepad.exe", "", true); err != nil {
 		return err
 	}
 

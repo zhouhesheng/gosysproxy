@@ -20,14 +20,25 @@ var (
 	procDuplicateTokenEx             *windows.LazyProc = modadvapi32.NewProc("DuplicateTokenEx")
 	procCreateEnvironmentBlock       *windows.LazyProc = moduserenv.NewProc("CreateEnvironmentBlock")
 	procCreateProcessAsUser          *windows.LazyProc = modadvapi32.NewProc("CreateProcessAsUserW")
+	procGetTokenInformation          *windows.LazyProc = modadvapi32.NewProc("GetTokenInformation")
 )
+
+type WTS_CONNECTSTATE_CLASS int
+type SECURITY_IMPERSONATION_LEVEL int
+type TOKEN_TYPE int
+type SW int
+type WTS_SESSION_INFO struct {
+	SessionID      windows.Handle
+	WinStationName *uint16
+	State          WTS_CONNECTSTATE_CLASS
+}
+type TOKEN_LINKED_TOKEN struct {
+	LinkedToken windows.Token
+}
 
 const (
 	WTS_CURRENT_SERVER_HANDLE uintptr = 0
 )
-
-type WTS_CONNECTSTATE_CLASS int
-
 const (
 	WTSActive WTS_CONNECTSTATE_CLASS = iota
 	WTSConnected
@@ -40,25 +51,16 @@ const (
 	WTSDown
 	WTSInit
 )
-
-type SECURITY_IMPERSONATION_LEVEL int
-
 const (
 	SecurityAnonymous SECURITY_IMPERSONATION_LEVEL = iota
 	SecurityIdentification
 	SecurityImpersonation
 	SecurityDelegation
 )
-
-type TOKEN_TYPE int
-
 const (
 	TokenPrimary TOKEN_TYPE = iota + 1
 	TokenImpersonazion
 )
-
-type SW int
-
 const (
 	SW_HIDE            SW = 0
 	SW_SHOWNORMAL         = 1
@@ -75,13 +77,6 @@ const (
 	SW_SHOWDEFAULT        = 10
 	SW_MAX                = 1
 )
-
-type WTS_SESSION_INFO struct {
-	SessionID      windows.Handle
-	WinStationName *uint16
-	State          WTS_CONNECTSTATE_CLASS
-}
-
 const (
 	CREATE_UNICODE_ENVIRONMENT uint32 = 0x00000400
 	CREATE_NO_WINDOW                  = 0x08000000
@@ -96,13 +91,11 @@ func GetCurrentUserSessionId() (windows.Handle, error) {
 	if err != nil {
 		return 0xFFFFFFFF, fmt.Errorf("get current user session token: %s", err)
 	}
-
 	for i := range sessionList {
 		if sessionList[i].State == WTSActive {
 			return sessionList[i].SessionID, nil
 		}
 	}
-
 	if sessionId, _, err := procWTSGetActiveConsoleSessionId.Call(); sessionId == 0xFFFFFFFF {
 		return 0xFFFFFFFF, fmt.Errorf("get current user session token: call native WTSGetActiveConsoleSessionId: %s", err)
 	} else {
@@ -119,11 +112,9 @@ func WTSEnumerateSessions() ([]*WTS_SESSION_INFO, error) {
 		sessionCount       int                 = 0
 		sessionList        []*WTS_SESSION_INFO = make([]*WTS_SESSION_INFO, 0)
 	)
-
 	if returnCode, _, err := procWTSEnumerateSessionsW.Call(WTS_CURRENT_SERVER_HANDLE, 0, 1, uintptr(unsafe.Pointer(&sessionInformation)), uintptr(unsafe.Pointer(&sessionCount))); returnCode == 0 {
 		return nil, fmt.Errorf("call native WTSEnumerateSessionsW: %s", err)
 	}
-
 	structSize := unsafe.Sizeof(WTS_SESSION_INFO{})
 	current := uintptr(sessionInformation)
 	for i := 0; i < sessionCount; i++ {
@@ -137,7 +128,7 @@ func WTSEnumerateSessions() ([]*WTS_SESSION_INFO, error) {
 // DuplicateUserTokenFromSessionID will attempt
 // to duplicate the user token for the user logged
 // into the provided session ID
-func DuplicateUserTokenFromSessionID(sessionId windows.Handle) (windows.Token, error) {
+func DuplicateUserTokenFromSessionID(sessionId windows.Handle, runAsAdmin bool) (windows.Token, error) {
 	var (
 		impersonationToken windows.Handle = 0
 		userToken          windows.Token  = 0
@@ -150,15 +141,20 @@ func DuplicateUserTokenFromSessionID(sessionId windows.Handle) (windows.Token, e
 	if returnCode, _, err := procDuplicateTokenEx.Call(uintptr(impersonationToken), 0, 0, uintptr(SecurityImpersonation), uintptr(TokenPrimary), uintptr(unsafe.Pointer(&userToken))); returnCode == 0 {
 		return 0xFFFFFFFF, fmt.Errorf("call native DuplicateTokenEx: %s", err)
 	}
-
+	if runAsAdmin {
+		var admin TOKEN_LINKED_TOKEN
+		var dt uintptr = 0
+		if returnCode, _, _ := procGetTokenInformation.Call(uintptr(impersonationToken), 19, uintptr(unsafe.Pointer(&admin)), uintptr(unsafe.Sizeof(admin)), uintptr(unsafe.Pointer(&dt))); returnCode != 0 {
+			userToken = admin.LinkedToken
+		}
+	}
 	if err := windows.CloseHandle(impersonationToken); err != nil {
 		return 0xFFFFFFFF, fmt.Errorf("close windows handle used for token duplication: %s", err)
 	}
-
 	return userToken, nil
 }
 
-func StartProcessAsCurrentUser(appPath, cmdLine, workDir string) error {
+func StartProcessAsCurrentUser(appPath, cmdLine, workDir string, runAsAdmin bool) error {
 	var (
 		sessionId windows.Handle
 		userToken windows.Token
@@ -177,7 +173,7 @@ func StartProcessAsCurrentUser(appPath, cmdLine, workDir string) error {
 		return err
 	}
 
-	if userToken, err = DuplicateUserTokenFromSessionID(sessionId); err != nil {
+	if userToken, err = DuplicateUserTokenFromSessionID(sessionId, runAsAdmin); err != nil {
 		return fmt.Errorf("get duplicate user token for current user session: %s", err)
 	}
 
@@ -195,13 +191,11 @@ func StartProcessAsCurrentUser(appPath, cmdLine, workDir string) error {
 	if len(workDir) > 0 {
 		workingDir = uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(workDir)))
 	}
-
 	if returnCode, _, err := procCreateProcessAsUser.Call(
 		uintptr(userToken), uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(appPath))), commandLine, 0, 0, 0,
 		uintptr(creationFlags), uintptr(envInfo), workingDir, uintptr(unsafe.Pointer(&startupInfo)), uintptr(unsafe.Pointer(&processInfo)),
 	); returnCode == 0 {
 		return fmt.Errorf("create process as user: %s", err)
 	}
-
 	return nil
 }
