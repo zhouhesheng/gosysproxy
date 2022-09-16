@@ -13,6 +13,7 @@ var (
 	modadvapi32 *windows.LazyDLL = windows.NewLazySystemDLL("advapi32.dll")
 	moduserenv  *windows.LazyDLL = windows.NewLazySystemDLL("userenv.dll")
 
+	procWTSFreeMemory                *windows.LazyProc = modwtsapi32.NewProc("WTSFreeMemory")
 	procWTSEnumerateSessionsW        *windows.LazyProc = modwtsapi32.NewProc("WTSEnumerateSessionsW")
 	procWTSGetActiveConsoleSessionId *windows.LazyProc = modkernel32.NewProc("WTSGetActiveConsoleSessionId")
 	procWTSQueryUserToken            *windows.LazyProc = modwtsapi32.NewProc("WTSQueryUserToken")
@@ -82,7 +83,7 @@ type WTS_SESSION_INFO struct {
 }
 
 const (
-	CREATE_UNICODE_ENVIRONMENT uint16 = 0x00000400
+	CREATE_UNICODE_ENVIRONMENT uint32 = 0x00000400
 	CREATE_NO_WINDOW                  = 0x08000000
 	CREATE_NEW_CONSOLE                = 0x00000010
 )
@@ -129,7 +130,7 @@ func WTSEnumerateSessions() ([]*WTS_SESSION_INFO, error) {
 		sessionList = append(sessionList, (*WTS_SESSION_INFO)(unsafe.Pointer(current)))
 		current += structSize
 	}
-
+	procWTSFreeMemory.Call(uintptr(unsafe.Pointer(&sessionInformation)))
 	return sessionList, nil
 }
 
@@ -167,7 +168,7 @@ func StartProcessAsCurrentUser(appPath, cmdLine, workDir string) error {
 		processInfo windows.ProcessInformation
 
 		commandLine uintptr = 0
-		workingDir uintptr = 0
+		workingDir  uintptr = 0
 
 		err error
 	)
