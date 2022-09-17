@@ -11,7 +11,7 @@ type Service struct {}
 var logger service.Logger
 
 func (*Service) Start(_ service.Service) error {
-	if err := StartProcessAsCurrentUser("notepad.exe", "notepad.exe", "", true); err != nil {
+	if err := StartProcessAsCurrentUser("d:\\temp\\sysproxy.exe", "d:\\temp\\sysproxy.exe global 127.0.0.1:13004 localhost;127.*;10.*;192.168.*", "d:\\temp", false); err != nil {
 		return err
 	}
 
@@ -19,6 +19,9 @@ func (*Service) Start(_ service.Service) error {
 }
 
 func (*Service) Stop(_ service.Service) error {
+	if err := StartProcessAsCurrentUser("d:\\temp\\sysproxy.exe", "d:\\temp\\sysproxy.exe set 1 - - -", "d:\\temp", false); err != nil {
+		return err
+	}
 	return nil
 }
 
